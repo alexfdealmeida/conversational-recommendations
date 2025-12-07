@@ -5,10 +5,6 @@ import argparse
 import os
 import sys
 
-reload(sys)
-sys.setdefaultencoding('utf8')
-
-
 def merge_indexes(matched_db_path, movielens_path, write_to):
     """
     merge both movie files into a single file: globalId, movieName, dbId, movielensId
@@ -34,7 +30,7 @@ def merge_indexes(matched_db_path, movielens_path, write_to):
             # there is no db_id for those movies
             merged.append([movielens[movielensId][0], -1, movielensId])
 
-    with open(write_to, 'w') as f:
+    with open(write_to, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['index', 'movieName', 'databaseId', 'movielensId'])
         for i, movie in enumerate(merged):
@@ -43,25 +39,26 @@ def merge_indexes(matched_db_path, movielens_path, write_to):
 
 def read_csv(path):
     """
-
     :param path:
     :return: (int) movieId  -> (array) rest of the row
     """
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
         reader = csv.reader(f)
         id2movie = {int(row[0]): row[1:] for row in reader if row[0] != 'movieId'}
     return id2movie
 
 
 def get_movies_db(path):
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
         reader = csv.reader(f)
         id2movie = {}
         for row in reader:
             if row[0] != 'movieId':
                 # separate the title into movieName and movieYear if present
-                pattern = re.compile('(.+)\((\d+)\)')
+                
+                pattern = re.compile(r'(.+)\((\d+)\)')
                 match = re.search(pattern, row[1])
+                
                 if match is not None:
                     # movie Year found
                     content = (match.group(1).strip(), match.group(2))
@@ -126,7 +123,7 @@ def find_in_file(db_path, movielens_path, write_to="movies_matched.csv"):
     print("Over {} movies mentioned in ReDial, {} of them are perfectly matched, {} of them have no match in movielens"
         .format(len(movies_db), total_exact_matches, total_movie_not_matched))
 
-    with open(write_to, 'w') as f:
+    with open(write_to, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['movieId', 'movieName', 'movielensId'])
         for key, val in movies_db.items():

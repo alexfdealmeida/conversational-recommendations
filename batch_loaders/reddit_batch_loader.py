@@ -6,14 +6,10 @@ from random import shuffle
 import pickle
 
 import torch
-from torch.autograd import Variable
 
 from utils import tokenize
 
 import sys
-
-reload(sys)
-sys.setdefaultencoding('utf8')
 
 
 def load_data(path):
@@ -23,7 +19,7 @@ def load_data(path):
     :return:
     """
     data = []
-    with open(path, "r") as f:
+    with open(path, "r", encoding='utf-8') as f:
         for line in f.readlines():
             if line == "\n":
                 continue
@@ -64,7 +60,9 @@ class RedditBatchLoader(object):
         print("Loading and processing reddit data")
         self.conversation_data = {key: load_data(val) for key, val in self.data_path.items()}
         # load vocabulary
-        self.train_vocabulary = pickle.load(open(self.vocab_path))
+        with open(self.vocab_path, 'rb') as f:
+            self.train_vocabulary = pickle.load(f)
+            
         print("Vocabulary size : {} words.".format(len(self.train_vocabulary)))
         if self.shuffle_data:
             # shuffle each subset
@@ -134,12 +132,13 @@ class RedditBatchLoader(object):
         batch["lengths"] = np.array(
             [lengths + [0] * (max_conv_len - len(lengths)) for lengths in batch["lengths"]]
         )
-        batch["dialogue"] = Variable(torch.LongTensor(
-            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len)))
-        batch["target"] = Variable(torch.LongTensor(
-            self.text_to_ids(batch["target"], max_utterance_len, max_conv_len)))
-        batch["senders"] = Variable(torch.FloatTensor(
-            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]]))
+        
+        batch["dialogue"] = torch.LongTensor(
+            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len))
+        batch["target"] = torch.LongTensor(
+            self.text_to_ids(batch["target"], max_utterance_len, max_conv_len))
+        batch["senders"] = torch.FloatTensor(
+            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]])
         batch["movie_occurrences"] = {}
         return batch
 

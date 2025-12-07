@@ -11,14 +11,10 @@ import random
 from collections import Counter
 
 import torch
-from torch.autograd import Variable
 
 from utils import tokenize
 
 import sys
-
-reload(sys)
-sys.setdefaultencoding('utf8')
 
 
 def load_data(path):
@@ -28,15 +24,16 @@ def load_data(path):
     :return:
     """
     data = []
-    for line in open(path):
-        data.append(json.loads(line))
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            data.append(json.loads(line))
     return data
 
 
 def get_movies(path):
     id2name = {}
     db2id = {}
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         # remove date from movie name
         date_pattern = re.compile(r'\(\d{4}\)')
@@ -44,7 +41,8 @@ def get_movies(path):
             if row[0] != "index":
                 id2name[int(row[0])] = date_pattern.sub('', row[1])
                 db2id[int(row[2])] = int(row[0])
-    del db2id[-1]
+    if -1 in db2id:
+        del db2id[-1]
     print("loaded {} movies from {}".format(len(id2name), path))
     return id2name, db2id
 
@@ -126,11 +124,22 @@ class DialogueBatchLoader(object):
             self.form_data = {key: self.extract_form_data(val) for key, val in self.conversation_data.items()}
         if "ratings" in self.sources:
             self.ratings_data = {key: self.extract_ratings_data(val) for key, val in self.conversation_data.items()}
-            train_mean = np.mean([np.mean(conv.values()) for conv in self.ratings_data["train"]])
+            train_vals = []
+            for conv in self.ratings_data["train"]:
+                if conv:
+                    train_vals.append(np.mean(list(conv.values())))
+            
+            train_mean = np.mean(train_vals) if train_vals else 0
             print("Mean training rating ", train_mean)
-            print("validation MSE made by mean estimator: {}".format(
-                np.mean([np.mean((np.array(conv.values()) - train_mean) ** 2)
-                         for conv in self.ratings_data["valid"]])))
+            
+            valid_vals = []
+            for conv in self.ratings_data["valid"]:
+                if conv:
+                    valid_vals.append(np.mean((np.array(list(conv.values())) - train_mean) ** 2))
+            
+            if valid_vals:
+                print("validation MSE made by mean estimator: {}".format(np.mean(valid_vals)))
+            
         # load vocabulary
         self.train_vocabulary = self._get_vocabulary()
         print("Vocabulary size : {} words.".format(len(self.train_vocabulary)))
@@ -162,7 +171,7 @@ class DialogueBatchLoader(object):
             init_q = conversation["initiatorQuestions"]
             resp_q = conversation["respondentQuestions"]
             # get movies that are in both forms. Do not take empty movie names
-            gen = (key for key in init_q if key in resp_q and not self.db2name[int(key)].isspace())
+            gen = (key for key in init_q if key in resp_q and int(key) in self.db2name and not self.db2name[int(key)].isspace())
             for key in gen:
                 answers = [init_q[key]["suggested"],
                            init_q[key]["seen"],
@@ -182,7 +191,7 @@ class DialogueBatchLoader(object):
         ratings_data = []
         for (i, conversation) in enumerate(data):
             conv_ratings = {}
-            gen = (key for key in conversation["initiatorQuestions"] if not self.db2name[int(key)].isspace())
+            gen = (key for key in conversation["initiatorQuestions"] if int(key) in self.db2name and not self.db2name[int(key)].isspace())
             for dbId in gen:
                 movieId = self.db2id[int(dbId)]
                 liked = int(conversation["initiatorQuestions"][dbId]["liked"])
@@ -201,7 +210,8 @@ class DialogueBatchLoader(object):
         """
         if os.path.isfile(self.vocab_path):
             print("Loading vocabulary from {}".format(self.vocab_path))
-            return pickle.load(open(self.vocab_path))
+            with open(self.vocab_path, 'rb') as f:
+                return pickle.load(f)
         print("Loading vocabulary from data")
         counter = Counter()
         # get vocabulary from dialogues
@@ -224,7 +234,7 @@ class DialogueBatchLoader(object):
             sum([counter[x] for x in counter])
         ))
         vocab += ['<s>', '</s>', '<pad>', '<unk>', '\n']
-        with open(self.vocab_path, 'w') as f:
+        with open(self.vocab_path, 'wb') as f:
             pickle.dump(vocab, f)
         print("Saved vocabulary in {}".format(self.vocab_path))
         return vocab
@@ -311,7 +321,7 @@ class DialogueBatchLoader(object):
         while index < len(tokenized):
             word = tokenized[index]
             # Check if word corresponds to a movieId.
-            if pattern.match(word) and int(word) in self.db2id and not self.db2name[int(word)].isspace():
+            if pattern.match(word) and int(word) in self.db2id and not self.db2name[self.db2id[int(word)]].isspace():
                 # get the global Id
                 movieId = self.db2id[int(word)]
                 # add movie to occurrence dict
@@ -420,12 +430,12 @@ class DialogueBatchLoader(object):
         batch["lengths"] = np.array(
             [lengths + [0] * (max_conv_len - len(lengths)) for lengths in batch["lengths"]]
         )
-        batch["dialogue"] = Variable(torch.LongTensor(
-            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len)))
-        batch["target"] = Variable(torch.LongTensor(
-            self.text_to_ids(batch["target"], max_utterance_len, max_conv_len)))
-        batch["senders"] = Variable(torch.FloatTensor(
-            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]]))
+        batch["dialogue"] = torch.LongTensor(
+            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len))
+        batch["target"] = torch.LongTensor(
+            self.text_to_ids(batch["target"], max_utterance_len, max_conv_len))
+        batch["senders"] = torch.FloatTensor(
+            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]])
         if "movie_occurrences" in self.sources:
             batch["movie_occurrences"] = [
                 {key: [utterance + [0] * (max_utterance_len - len(utterance)) for utterance in value] +
@@ -480,16 +490,16 @@ class DialogueBatchLoader(object):
         batch["lengths"] = np.array(
             [lengths + [0] * (max_conv_len - len(lengths)) for lengths in batch["lengths"]]
         )
-        batch["dialogue"] = Variable(torch.LongTensor(
-            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len)))  # (batch, conv_len, utt_len)
-        batch["senders"] = Variable(torch.FloatTensor(
-            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]]))
-        batch["forms"] = Variable(torch.LongTensor(batch["forms"]))  # (batch, 6)
+        batch["dialogue"] = torch.LongTensor(
+            self.text_to_ids(batch["dialogue"], max_utterance_len, max_conv_len))  # (batch, conv_len, utt_len)
+        batch["senders"] = torch.FloatTensor(
+            [senders + [0] * (max_conv_len - len(senders)) for senders in batch["senders"]])
+        batch["forms"] = torch.LongTensor(batch["forms"])  # (batch, 6)
         if "movie_occurrences" in self.sources:
-            batch["movie_occurrences"] = Variable(torch.FloatTensor(
+            batch["movie_occurrences"] = torch.FloatTensor(
                 [[utterance + [0] * (max_utterance_len - len(utterance)) for utterance in conv] +
                  [[0] * max_utterance_len] * (max_conv_len - len(conv)) for conv in batch["movie_occurrences"]]
-            ))
+            )
         return batch
 
     def _load_ratings_batch(self, subset, batch_input, max_num_inputs=None):
@@ -528,8 +538,8 @@ class DialogueBatchLoader(object):
                         target.append(target_tmp)
                 input = np.array(input)
                 target = np.array(target)
-            input = Variable(torch.from_numpy(input).float())
-            target = Variable(torch.from_numpy(target).float())
+            input = torch.from_numpy(input).float()
+            target = torch.from_numpy(target).float()
             return {"input": input, "target": target}
         # take random inputs
         elif batch_input == "random_noise":
@@ -540,7 +550,7 @@ class DialogueBatchLoader(object):
                 max_nb_inputs = min(max_num_inputs, len(ratings) - 1)
                 n_inputs = random.randint(1, max(1, max_nb_inputs))
                 # randomly chose the movies that will be in the input
-                input_keys = random.sample(ratings.keys(), n_inputs)
+                input_keys = random.sample(list(ratings.keys()), n_inputs)
                 # Create input
                 for (movieId, rating) in ratings.items():
                     if movieId in input_keys:
@@ -548,8 +558,8 @@ class DialogueBatchLoader(object):
                 # Create target
                 for (movieId, rating) in ratings.items():
                     target[i, movieId] = rating
-            return {"input": Variable(torch.from_numpy(input).float()),
-                    "target": Variable(torch.from_numpy(target).float())}
+            return {"input": torch.from_numpy(input).float(),
+                    "target": torch.from_numpy(target).float()}
 
     def load_batch(self, subset="train",
                    flatten_messages=True, batch_input="random_noise", cut_dialogues=-1, max_num_inputs=None):
