@@ -5,8 +5,8 @@ https://arxiv.org/abs/1812.07617
 
 ## Requirements
 
-- Python 2.7
-- PyTorch 0.4.1
+- Python
+- PyTorch
 - tqdm
 - nltk
 - h5py
