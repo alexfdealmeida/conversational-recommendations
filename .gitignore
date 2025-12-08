@@ -1,5 +1,6 @@
 *.pyc
 *~
+*.bak
 .ipynb_checkpoints
 generations.txt
 
@@ -8,3 +9,5 @@ generations.txt
 
 __pycache__/
 temp/
+
+.tmp.drivedownload
