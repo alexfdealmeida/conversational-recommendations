@@ -29,36 +29,32 @@ cd conversational-recommendations
 pip install -r requirements.txt
 python -m nltk.downloader punkt
 
-# Create directories
-mkdir -p redial movielens data
-
 # Download ReDial
-wget -O redial/redial_dataset.zip https://github.com/ReDialData/website/raw/data/redial_dataset.zip
+wget -O temp/data/redial/redial_dataset.zip https://github.com/ReDialData/website/raw/data/redial_dataset.zip
 # Download MovieLens
-wget -O movielens/ml-latest.zip http://files.grouplens.org/datasets/movielens/ml-latest.zip
+wget -O temp/data/movielens/ml-latest.zip http://files.grouplens.org/datasets/movielens/ml-latest.zip
 
 # Split ReDial data
-python scripts/split-redial.py redial/
-mv redial/test_data.jsonl redial/test_data
+python scripts/split-redial.py temp/data/redial/
+mv temp/data/redial/test_data.jsonl temp/data/redial/test_data
 
 # Split Movielens data
-python scripts/split-movielens.py movielens/
+python scripts/split-movielens.py temp/data/movielens/
 ```
 
 ### 2. Match Movie Entities
 
 Merge the movie lists by matching the movie names from ReDial and Movielens. Note that this will create an intermediate file `movies_matched.csv`, which is deleted at the end of the script.
 ```
-python scripts/match_movies.py --redial_movies_path=redial/movies_with_mentions.csv --ml_movies_path=movielens/ml-latest/movies.csv --destination=redial/movies_merged.csv
+python scripts/match_movies.py \
+    --redial_movies_path=temp/data/redial/movies_with_mentions.csv \
+    --ml_movies_path=temp/data/movielens/ml-latest/movies.csv \
+    --destination=temp/data/movies_merged.csv
 ```
 
 ### 3. Configuration
 
-In `config.py`, ensure the paths point to your data folders. Note: The GenSen paths are no longer required as BERT is downloaded automatically.
-
-- `MODELS_PATH`: Folder where trained models will be saved.
-- `REDIAL_DATA_PATH`: Folder containing `train_data`, `valid_data`, and `test_data`.
-- `ML_DATA_PATH`: Folder containing `train_ratings`, `valid_ratings`, and `test_ratings`.
+The `config.py` is already set up to use `temp/data` and `temp/models` relative to the project root. No manual change is needed for local or Colab execution.
 
 ### 4. Train models
 
@@ -79,5 +75,5 @@ python train_recommender.py
 ### 5. Generate sentences
 `generate_responses.py` loads a trained model and generates responses for the test set.
 ```
-python generate_responses.py --model_path=/path/to/models/recommender/model_best --save_path=generations
+python generate_responses.py --model_path=temp/models/recommender/model_best --save_path=generations.txt
 ```

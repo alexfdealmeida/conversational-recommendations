@@ -1,9 +1,10 @@
 *.pyc
 *~
+.ipynb_checkpoints
+generations.txt
 
 *.csv
 *.tar.gz
 
-# datasets
-redial
-movielens
+__pycache__/
+temp/
