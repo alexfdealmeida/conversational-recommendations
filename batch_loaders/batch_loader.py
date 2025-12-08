@@ -321,7 +321,7 @@ class DialogueBatchLoader(object):
         while index < len(tokenized):
             word = tokenized[index]
             # Check if word corresponds to a movieId.
-            if pattern.match(word) and int(word) in self.db2id and not self.db2name[self.db2id[int(word)]].isspace():
+            if pattern.match(word) and int(word) in self.db2id and not self.db2name[int(word)].isspace():
                 # get the global Id
                 movieId = self.db2id[int(word)]
                 # add movie to occurrence dict
