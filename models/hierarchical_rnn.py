@@ -51,9 +51,16 @@ class HRNN(nn.Module):
         """Reconstroi sentenças de texto a partir dos IDs para o BERT"""
         sentences = []
         dialogue_cpu = dialogue_ids.cpu().numpy()
+        
+        # Garante que lengths seja uma lista ou array numpy acessível
+        if isinstance(lengths, torch.Tensor):
+            lengths_cpu = lengths.cpu().numpy()
+        else:
+            lengths_cpu = lengths
+
         for i, seq in enumerate(dialogue_cpu):
             # Pega apenas os tokens válidos baseados no length
-            valid_len = lengths[i]
+            valid_len = int(lengths_cpu[i])
             if valid_len == 0:
                 sentences.append("")
                 continue
@@ -72,23 +79,39 @@ class HRNN(nn.Module):
         flat_dialogue = dialogue.view(-1, dialogue.shape[-1]) #(total_sentences, seq_len)
         flat_lengths = lengths.reshape(-1)
         
+        # Converter lengths (numpy) para Tensor para usar na máscara
+        if isinstance(flat_lengths, np.ndarray):
+            flat_lengths_tensor = torch.from_numpy(flat_lengths)
+        else:
+            flat_lengths_tensor = flat_lengths
+            
+        if self.cuda_available:
+            flat_lengths_tensor = flat_lengths_tensor.cuda()
+
         # Otimização: processar apenas sentenças com tamanho > 0
-        non_zero_mask = flat_lengths > 0
-        active_indices = torch.nonzero(non_zero_mask).squeeze()
+        non_zero_mask = flat_lengths_tensor > 0
         
-        if len(active_indices.shape) == 0: # Caso raro de batch vazio
+        # torch.nonzero retorna tensor de indices. squeeze para remover dimensão extra
+        active_indices = torch.nonzero(non_zero_mask, as_tuple=False).squeeze(1)
+        
+        # Caso raro de batch vazio ou indices unicos
+        if active_indices.numel() == 0:
              active_dialogue = flat_dialogue
-             active_lengths = flat_lengths
+             active_lengths = flat_lengths_tensor
         else:
             active_dialogue = flat_dialogue[active_indices]
-            active_lengths = flat_lengths[active_indices]
+            active_lengths = flat_lengths_tensor[active_indices]
 
         # 1. Converter IDs para Texto
         text_sentences = self.ids_to_sentences(active_dialogue, active_lengths)
         
         # 2. Passar pelo BERT (recebe lista de strings, retorna tensor)
         # O resultado já é (num_sentences, 768) - pooled embedding
-        bert_embeddings = self.bert.get_sentence_embeddings(text_sentences)
+        if len(text_sentences) > 0:
+            bert_embeddings = self.bert.get_sentence_embeddings(text_sentences)
+        else:
+            bert_embeddings = torch.empty(0, self.bert.output_dim)
+            if self.cuda_available: bert_embeddings = bert_embeddings.cuda()
         
         # 3. Restaurar formato (Preencher com zeros as sentenças vazias)
         if self.cuda_available:
@@ -96,7 +119,7 @@ class HRNN(nn.Module):
         else:
             sentence_representations = torch.zeros(batch_size * max_conversation_length, self.bert.output_dim)
             
-        if len(active_indices.shape) > 0:
+        if active_indices.numel() > 0:
             sentence_representations[active_indices] = bert_embeddings
 
         # 4. Dropout
