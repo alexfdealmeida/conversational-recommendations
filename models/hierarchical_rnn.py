@@ -1,212 +1,156 @@
 import torch
-from torch.autograd import Variable
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-
 import numpy as np
 import os
-
 import config
-from models.gensen import GenSenSingle
+from models.bert_wrapper import BertEncoderWrapper # Novo wrapper
 from utils import sort_for_packed_sequence
 
-
 class HRNN(nn.Module):
-    """
-    Hierarchical Recurrent Neural Network
-
-    params.keys() ['use_gensen', 'use_movie_occurrences', 'sentence_encoder_hidden_size',
-    'conversation_encoder_hidden_size', 'sentence_encoder_num_layers', 'conversation_encoder_num_layers', 'use_dropout',
-    ['embedding_dimension']]
-
-    Input: Input["dialogue"] (batch, max_conv_length, max_utterance_length) Long Tensor
-           Input["senders"] (batch, max_conv_length) Float Tensor
-           Input["lengths"] (batch, max_conv_length) list
-           (optional) Input["movie_occurrences"] (batch, max_conv_length, max_utterance_length) for word occurence
-                                                 (batch, max_conv_length) for sentence occurrence. Float Tensor
-    """
-
     def __init__(self,
                  params,
-                 gensen=False,
+                 gensen=False, # Mantive o nome do argumento para compatibilidade
                  train_vocabulary=None,
                  train_gensen=True,
                  conv_bidirectional=False):
         super(HRNN, self).__init__()
         self.params = params
-        self.use_gensen = bool(gensen)
-        self.train_gensen = train_gensen
-        self.conv_bidirectional = conv_bidirectional
-
+        self.use_bert = True # Forçamos BERT
         self.cuda_available = torch.cuda.is_available()
+        
+        # Vocab para reconstrução de texto (ID -> String)
+        self.id2word = {idx: word for idx, word in enumerate(train_vocabulary)}
+        self.word2id = {word: idx for idx, word in enumerate(train_vocabulary)}
 
-        # Use instance of gensen if provided
-        if isinstance(gensen, GenSenSingle):
-            # Assume that vocab expansion is already run on gensen
-            self.gensen = gensen
-            self.word2id = self.gensen.task_word2id
-            # freeze gensen's weights
-            if not self.train_gensen:
-                for param in self.gensen.parameters():
-                    param.requires_grad = False
-        # Otherwise instantiate a new gensen module
-        elif self.use_gensen:
-            self.gensen = GenSenSingle(
-                model_folder=os.path.join(config.MODELS_PATH, 'GenSen'),
-                filename_prefix='nli_large',
-                pretrained_emb=os.path.join(config.MODELS_PATH, 'embeddings/glove.840B.300d.h5'),
-                cuda=self.cuda_available
-            )
-            self.gensen.vocab_expansion(list(train_vocabulary))
-            self.word2id = self.gensen.task_word2id
-            # freeze gensen's weights
-            if not self.train_gensen:
-                for param in self.gensen.parameters():
-                    param.requires_grad = False
-        else:
-            self.src_embedding = nn.Embedding(
-                num_embeddings=len(train_vocabulary),
-                embedding_dim=params['embedding_dimension']
-            )
-            self.word2id = {word: idx for idx, word in enumerate(train_vocabulary)}
-            self.id2word = {idx: word for idx, word in enumerate(train_vocabulary)}
-        self.sentence_encoder = nn.GRU(
-            input_size=2048 + (self.params['use_movie_occurrences'] == "word") if self.use_gensen
-            else self.params['embedding_dimension'] + (self.params['use_movie_occurrences'] == "word"),
-            hidden_size=self.params['sentence_encoder_hidden_size'],
-            num_layers=self.params['sentence_encoder_num_layers'],
-            batch_first=True,
-            bidirectional=True
-        )
+        # Inicializa BERT Wrapper
+        self.bert = BertEncoderWrapper(config.BERT_MODEL_NAME, device='cuda' if self.cuda_available else 'cpu')
+        
+        # Conversation Encoder (GRU)
+        # Input size agora é o output do BERT
+        input_size_conv = self.bert.output_dim
+        
+        if self.params['use_movie_occurrences'] == "sentence":
+            input_size_conv += 1
+        
+        # Adiciona info do sender
+        input_size_conv += 1 
+
         self.conversation_encoder = nn.GRU(
-            input_size=2 * self.params['sentence_encoder_hidden_size']
-                       + 1 + (self.params['use_movie_occurrences'] == "sentence"),
-            # concatenation of 2 directions for sentence encoders + sender informations + movie occurences
+            input_size=input_size_conv,
             hidden_size=self.params['conversation_encoder_hidden_size'],
             num_layers=self.params['conversation_encoder_num_layers'],
             batch_first=True,
             bidirectional=conv_bidirectional
         )
+        
         if self.params['use_dropout']:
             self.dropout = nn.Dropout(p=self.params['use_dropout'])
 
+    def ids_to_sentences(self, dialogue_ids, lengths):
+        """Reconstroi sentenças de texto a partir dos IDs para o BERT"""
+        sentences = []
+        dialogue_cpu = dialogue_ids.cpu().numpy()
+        for i, seq in enumerate(dialogue_cpu):
+            # Pega apenas os tokens válidos baseados no length
+            valid_len = lengths[i]
+            if valid_len == 0:
+                sentences.append("")
+                continue
+            
+            # Reconstrói a string
+            words = [self.id2word.get(idx, '<unk>') for idx in seq[:valid_len]]
+            # Remove tokens especiais se necessário
+            words = [w for w in words if w not in ['<s>', '</s>', '<pad>']]
+            sentences.append(" ".join(words))
+        return sentences
+
     def get_sentence_representations(self, dialogue, senders, lengths, movie_occurrences=None):
-        batch_size, max_conversation_length = dialogue.data.shape[:2]
-        # order by descending utterance length
-        lengths = lengths.reshape((-1))
-        sorted_lengths, sorted_idx, rev = sort_for_packed_sequence(lengths, self.cuda_available)
-
-        # reshape and reorder
-        sorted_utterances = dialogue.view(batch_size * max_conversation_length, -1).index_select(0, sorted_idx)
-
-        # consider sequences of length > 0 only
-        num_positive_lengths = np.sum(lengths > 0)
-        sorted_utterances = sorted_utterances[:num_positive_lengths]
-        sorted_lengths = sorted_lengths[:num_positive_lengths]
-
-        if self.use_gensen:
-            # apply GenSen model and use outputs as word embeddings
-            embedded, _ = self.gensen.get_representation_from_ordered(sorted_utterances,
-                                                                      lengths=sorted_lengths,
-                                                                      pool='last',
-                                                                      return_numpy=False)
+        batch_size, max_conversation_length = dialogue.shape[:2]
+        
+        # Flatten para processar sentenças
+        flat_dialogue = dialogue.view(-1, dialogue.shape[-1]) #(total_sentences, seq_len)
+        flat_lengths = lengths.reshape(-1)
+        
+        # Otimização: processar apenas sentenças com tamanho > 0
+        non_zero_mask = flat_lengths > 0
+        active_indices = torch.nonzero(non_zero_mask).squeeze()
+        
+        if len(active_indices.shape) == 0: # Caso raro de batch vazio
+             active_dialogue = flat_dialogue
+             active_lengths = flat_lengths
         else:
-            embedded = self.src_embedding(sorted_utterances)
-        # (< batch_size * max conversation_length, max_sentence_length, embedding_size/2048 for gensen)
-        # print("EMBEDDED SHAPE", embedded.data.shape)
+            active_dialogue = flat_dialogue[active_indices]
+            active_lengths = flat_lengths[active_indices]
 
-        if self.params['use_dropout']:
-            embedded = self.dropout(embedded)
+        # 1. Converter IDs para Texto
+        text_sentences = self.ids_to_sentences(active_dialogue, active_lengths)
+        
+        # 2. Passar pelo BERT (recebe lista de strings, retorna tensor)
+        # O resultado já é (num_sentences, 768) - pooled embedding
+        bert_embeddings = self.bert.get_sentence_embeddings(text_sentences)
+        
+        # 3. Restaurar formato (Preencher com zeros as sentenças vazias)
+        if self.cuda_available:
+            sentence_representations = torch.zeros(batch_size * max_conversation_length, self.bert.output_dim).cuda()
+        else:
+            sentence_representations = torch.zeros(batch_size * max_conversation_length, self.bert.output_dim)
+            
+        if len(active_indices.shape) > 0:
+            sentence_representations[active_indices] = bert_embeddings
 
-        if self.params['use_movie_occurrences'] == "word":
-            if movie_occurrences is None:
-                raise ValueError("Please specify movie occurrences")
-            # reshape and reorder movie occurrences by utterance length
-            movie_occurrences = movie_occurrences.view(
-                batch_size * max_conversation_length, -1).index_select(0, sorted_idx)
-            # keep indices where sequence_length > 0
-            movie_occurrences = movie_occurrences[:num_positive_lengths]
-            embedded = torch.cat((embedded, movie_occurrences.unsqueeze(2)), 2)
-
-        packed_sentences = pack_padded_sequence(embedded, sorted_lengths, batch_first=True)
-        # Apply encoder and get the final hidden states
-        _, sentence_representations = self.sentence_encoder(packed_sentences)
-        # (2*num_layers, < batch_size * max_conv_length, hidden_size)
-        # Concat the hidden states of the last layer (two directions of the GRU)
-        sentence_representations = torch.cat((sentence_representations[-1], sentence_representations[-2]), 1)
-
+        # 4. Dropout
         if self.params['use_dropout']:
             sentence_representations = self.dropout(sentence_representations)
 
-        # Complete the missing sequences (of length 0)
-        if num_positive_lengths < batch_size * max_conversation_length:
-            tt = torch.cuda.FloatTensor if self.cuda_available else torch.FloatTensor
-            pad_tensor = Variable(torch.zeros(
-                batch_size * max_conversation_length - num_positive_lengths,
-                2 * self.params['sentence_encoder_hidden_size'],
-                out=tt()
-            ))
-            sentence_representations = torch.cat((
-                sentence_representations,
-                pad_tensor
-            ), 0)
-        # print("SENTENCE REP SHAPE",
-        #       sentence_representations.data.shape)  # (batch_size * max_conversation_length, 2*hidden_size)
-        # Retrieve original sentence order and Reshape to separate conversations
-        sentence_representations = sentence_representations.index_select(0, rev).view(
-            batch_size,
-            max_conversation_length,
-            2 * self.params['sentence_encoder_hidden_size'])
-        # Append sender information
+        # 5. Reshape para (batch, conv_len, hidden)
+        sentence_representations = sentence_representations.view(batch_size, max_conversation_length, -1)
+        
+        # 6. Adicionar sender info (append na dimensão de features)
         sentence_representations = torch.cat([sentence_representations, senders.unsqueeze(2)], 2)
-        # Append movie occurrence information if required
+
+        # 7. Adicionar movie occurence se necessário
         if self.params['use_movie_occurrences'] == "sentence":
             if movie_occurrences is None:
                 raise ValueError("Please specify movie occurrences")
             sentence_representations = torch.cat((sentence_representations, movie_occurrences.unsqueeze(2)), 2)
-        # print("SENTENCE REP SHAPE WITH SENDER INFO", sentence_representations.data.shape)
-        #  (batch_size, max_conv_length, 513 + self.params['use_movie_occurrences'])
+
         return sentence_representations
 
     def forward(self, input_dict, return_all=True, return_sentence_representations=False):
         movie_occurrences = input_dict["movie_occurrences"] if self.params['use_movie_occurrences'] else None
-        # get sentence representations
+        
+        # BERT substitui o sentence encoder antigo
         sentence_representations = self.get_sentence_representations(
             input_dict["dialogue"], input_dict["senders"], lengths=input_dict["lengths"],
             movie_occurrences=movie_occurrences)
-        # (batch_size, max_conv_length, 2*sent_hidden_size + 1 + use_movie_occurences)
-        # Pass whole conversation into GRU
+
+        # Passar pela GRU da conversa
         lengths = input_dict["conversation_lengths"]
         sorted_lengths, sorted_idx, rev = sort_for_packed_sequence(lengths, self.cuda_available)
 
-        # reorder in decreasing sequence length
         sorted_representations = sentence_representations.index_select(0, sorted_idx)
-        packed_sequences = pack_padded_sequence(sorted_representations, sorted_lengths, batch_first=True)
+        packed_sequences = pack_padded_sequence(sorted_representations, sorted_lengths.cpu(), batch_first=True)
+        
         conversation_representations, last_state = self.conversation_encoder(packed_sequences)
 
-        # retrieve original order
         conversation_representations, _ = pad_packed_sequence(conversation_representations, batch_first=True)
         conversation_representations = conversation_representations.index_select(0, rev)
-        # print("LAST STATE SHAPE", last_state.data.shape) # (num_layers * num_directions, batch, conv_hidden_size)
+        
         last_state = last_state.index_select(1, rev)
+        
         if self.params['use_dropout']:
             conversation_representations = self.dropout(conversation_representations)
             last_state = self.dropout(last_state)
+            
         if return_all:
             if not return_sentence_representations:
-                # return the last layer of the GRU for each t.
-                # (batch_size, max_conv_length, hidden_size*num_directions
                 return conversation_representations
             else:
-                # also return sentence representations
                 return conversation_representations, sentence_representations
         else:
-            # get the last hidden state only
-            if self.conv_bidirectional:
-                # Concat the hidden states for the last layer (two directions of the GRU)
+            if self.conversation_encoder.bidirectional:
                 last_state = torch.cat((last_state[-1], last_state[-2]), 1)
-                # (batch_size, num_directions*hidden_size)
                 return last_state
             else:
-                # Return the hidden state from the last layers
                 return last_state[-1]

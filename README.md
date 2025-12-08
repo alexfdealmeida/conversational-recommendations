@@ -1,12 +1,14 @@
-# movie-dialogue-dev
+# movie-dialogue-dev (BERT Version)
 
-This repository contains the code for NeurIPS 2018 paper "Towards Deep Conversational Recommendations" 
-https://arxiv.org/abs/1812.07617
+This repository contains an adapted version of the code for NeurIPS 2018 paper "Towards Deep Conversational Recommendations" https://arxiv.org/abs/1812.07617.
+
+Update: This version replaces the deprecated GenSen encoder with BERT (SBERT via sentence-transformers) for sentence embeddings.
 
 ## Requirements
 
-- Python
+- Python 3.x
 - PyTorch
+- sentence-tranformers
 - tqdm
 - nltk
 - h5py
@@ -15,79 +17,67 @@ https://arxiv.org/abs/1812.07617
 
 ## Usage
 
-### Get the data
+### 1. Get the data
 Get ReDial data from https://github.com/ReDialData/website/tree/data and Movielens data https://grouplens.org/datasets/movielens/latest/. Note that for the paper we retrieved the Movielens
-data set in September 2017. The Movielens latest dataset has been updated since then.
+data set in December 2025. The Movielens latest dataset has been updated since then.
 ```
-git clone https://github.com/RaymondLi0/conversational-recommendations.git
+# Clone repository
+git clone https://github.com/alexfdealmeida/conversational-recommendations.git
 cd conversational-recommendations
+
+# Install dependencies
 pip install -r requirements.txt
 python -m nltk.downloader punkt
 
-mkdir -p redial movielens
+# Create directories
+mkdir -p redial movielens data
+
+# Download ReDial
 wget -O redial/redial_dataset.zip https://github.com/ReDialData/website/raw/data/redial_dataset.zip
+# Download MovieLens
 wget -O movielens/ml-latest.zip http://files.grouplens.org/datasets/movielens/ml-latest.zip
-# split ReDial data
+
+# Split ReDial data
 python scripts/split-redial.py redial/
 mv redial/test_data.jsonl redial/test_data
-# split Movielens data
+
+# Split Movielens data
 python scripts/split-movielens.py movielens/
 ```
+
+### 2. Match Movie Entities
 
 Merge the movie lists by matching the movie names from ReDial and Movielens. Note that this will create an intermediate file `movies_matched.csv`, which is deleted at the end of the script.
 ```
 python scripts/match_movies.py --redial_movies_path=redial/movies_with_mentions.csv --ml_movies_path=movielens/ml-latest/movies.csv --destination=redial/movies_merged.csv
 ```
 
-### Specify the paths
+### 3. Configuration
 
-In the `config.py` file, specify the different paths to use:
+In `config.py`, ensure the paths point to your data folders. Note: The GenSen paths are no longer required as BERT is downloaded automatically.
 
-- Model weights will be saved in folder `MODELS_PATH='/path/to/models'`
-- ReDial data in folder `REDIAL_DATA_PATH='/path/to/redial'`.
-This folder must contain three files called `train_data`, `valid_data` and `test_data`
-- Movielens data in folder `ML_DATA_PATH='/path/to/movielens'`.
-This folder must contain three files called `train_ratings`, `valid_ratings` and `test_ratings`
+- `MODELS_PATH`: Folder where trained models will be saved.
+- `REDIAL_DATA_PATH`: Folder containing `train_data`, `valid_data`, and `test_data`.
+- `ML_DATA_PATH`: Folder containing `train_ratings`, `valid_ratings`, and `test_ratings`.
 
-### Get GenSen pre-trained models
+### 4. Train models
 
-Get GenSen pre-trained models from https://github.com/Maluuba/gensen.
-More precisely, you will need the embeddings in the `/path/to/models/embeddings` folder, and 
-the following model files: `nli_large_vocab.pkl`, `nli_large.model` in the `/path/to/models/GenSen` folder
-```
-cd /path/to/models
-mkdir GenSen embeddings
-wget -O GenSen/nli_large_vocab.pkl https://genseniclr2018.blob.core.windows.net/models/nli_large_vocab.pkl
-wget -O GenSen/nli_large.model https://genseniclr2018.blob.core.windows.net/models/nli_large.model
-cd embeddings
-wget https://raw.githubusercontent.com/Maluuba/gensen/master/data/embedding/glove2h5.py
-wget https://github.com/Maluuba/gensen/raw/master/data/embedding/glove2h5.sh
-sh glove2h5.sh
-cd /path/to/project_dir
-```
-
-### Train models
-
-- Train sentiment analysis. This will train a model to predict the movie form labels from ReDial.
-The model will be saved in the `/path/to/models/sentiment_analysis` folder
+Note on BERT: The first time you run these scripts, the BERT model (e.g., all-mpnet-base-v2) will be downloaded automatically by sentence-transformers.
+- Train sentiment analysis: (Optional if using Recommender only) Trains a model to predict movie form labels from ReDial.
 ```
 python train_sentiment_analysis.py
 ```
-- Train autoencoder recommender system. This will pre-train an Autoencoder Recommender system on Movielens, then fine-tune it on ReDial.
-The model will be saved in the `/path/to/models/autorec` folder 
+- Train autoencoder recommender system: Pre-trains an Autoencoder on Movielens, then fine-tunes it on ReDial.
 ```
 python train_autorec.py
 ```
-- Train conversational recommendation model. This will train the whole conversational recommendation model, using the previously trained models.
- The model will be saved in the `/path/to/models/recommender` folder.
+- Train conversational recommendation model: Trains the hierarchical RNN (HRNN) using BERT embeddings and the recommender module.
 ```
 python train_recommender.py
 ```
 
-### Generate sentences
-`generate_responses.py` loads a trained model. 
-It takes real dialogues from the ReDial dataset and lets the model generate responses whenever the human recommender speaks
-(responses are conditioned on the current dialogue history).
+### 5. Generate sentences
+`generate_responses.py` loads a trained model and generates responses for the test set.
 ```
 python generate_responses.py --model_path=/path/to/models/recommender/model_best --save_path=generations
 ```

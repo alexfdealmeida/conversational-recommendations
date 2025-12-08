@@ -4,3 +4,4 @@ tqdm
 nltk
 h5py
 numpy
+sentence-transformers
