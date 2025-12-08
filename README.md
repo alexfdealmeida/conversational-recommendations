@@ -49,7 +49,7 @@ Merge the movie lists by matching the movie names from ReDial and Movielens. Not
 python scripts/match_movies.py \
     --redial_movies_path=temp/data/redial/movies_with_mentions.csv \
     --ml_movies_path=temp/data/movielens/ml-latest/movies.csv \
-    --destination=temp/data/movies_merged.csv
+    --destination=temp/data/redial/movies_merged.csv
 ```
 
 ### 3. Configuration

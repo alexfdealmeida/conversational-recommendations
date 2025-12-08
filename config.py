@@ -3,7 +3,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 TEMP_DIR = os.path.join(BASE_DIR, 'temp')
-REDIAL_DATA_PATH = os.path.join(TEMP_DIR, 'data')
+REDIAL_DATA_PATH = os.path.join(TEMP_DIR, 'data', 'redial')
 MODELS_PATH = os.path.join(TEMP_DIR, 'models')
 
 # if not os.path.exists(REDIAL_DATA_PATH):
