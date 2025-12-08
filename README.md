@@ -27,7 +27,7 @@ cd conversational-recommendations
 
 # Install dependencies
 pip install -r requirements.txt
-python -m nltk.downloader punkt
+python -m nltk.downloader punkt punkt_tab
 
 # Download ReDial
 wget -O temp/data/redial/redial_dataset.zip https://github.com/ReDialData/website/raw/data/redial_dataset.zip
