@@ -4,19 +4,19 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 import numpy as np
 import os
 import config
-from models.bert_wrapper import BertEncoderWrapper # Novo wrapper
+from models.bert_wrapper import BertEncoderWrapper
 from utils import sort_for_packed_sequence
 
 class HRNN(nn.Module):
     def __init__(self,
                  params,
-                 gensen=False, # Mantive o nome do argumento para compatibilidade
+                 gensen=False,
                  train_vocabulary=None,
                  train_gensen=True,
                  conv_bidirectional=False):
         super(HRNN, self).__init__()
         self.params = params
-        self.use_bert = True # Forçamos BERT
+        self.use_bert = True
         self.cuda_available = torch.cuda.is_available()
         
         # Vocab para reconstrução de texto (ID -> String)
@@ -153,7 +153,10 @@ class HRNN(nn.Module):
         sorted_lengths, sorted_idx, rev = sort_for_packed_sequence(lengths, self.cuda_available)
 
         sorted_representations = sentence_representations.index_select(0, sorted_idx)
-        packed_sequences = pack_padded_sequence(sorted_representations, sorted_lengths.cpu(), batch_first=True)
+        
+        sorted_lengths_tensor = torch.as_tensor(sorted_lengths, dtype=torch.int64).cpu()
+        
+        packed_sequences = pack_padded_sequence(sorted_representations, sorted_lengths_tensor, batch_first=True)
         
         conversation_representations, last_state = self.conversation_encoder(packed_sequences)
 
