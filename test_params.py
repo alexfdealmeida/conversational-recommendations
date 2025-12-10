@@ -2,15 +2,15 @@ import config
 
 # Model hyper parameters
 decoder_params = {
-    "hidden_size": config.BERT_EMBEDDING_SIZE, # Adaptado para BERT
+    "hidden_size": config.BERT_EMBEDDING_SIZE,
     "num_layers": 1,
     "peephole": False
 }
 
 hrnn_params = {
     'use_movie_occurrences': False,
-    'sentence_encoder_hidden_size': config.BERT_EMBEDDING_SIZE, # Adaptado
-    'conversation_encoder_hidden_size': config.BERT_EMBEDDING_SIZE, # Adaptado
+    'sentence_encoder_hidden_size': config.BERT_EMBEDDING_SIZE,
+    'conversation_encoder_hidden_size': config.BERT_EMBEDDING_SIZE,
     'sentence_encoder_num_layers': 1,
     'conversation_encoder_num_layers': 1,
     'use_dropout': False,
@@ -54,8 +54,8 @@ recommender_params = {
 # Training params
 train_sa_params = {
     "learning_rate": 0.001,
-    "batch_size": 16,
-    "nb_epochs": 50,
+    "batch_size": 32, # Default: 16
+    "nb_epochs": 30, # Default: 50
     "patience": 5,
     "weight_decay": 0,
     "use_class_weights": True,
@@ -66,7 +66,7 @@ train_sa_params = {
 train_autorec_params = {
     "learning_rate": 0.001,
     "batch_size": 64,
-    "nb_epochs": 50,
+    "nb_epochs": 30, # Default: 50
     "patience": 5,
     "batch_input": "random_noise",
     "max_num_inputs": 10000 
@@ -74,7 +74,7 @@ train_autorec_params = {
 
 train_recommender_params = {
     "learning_rate": 0.001,
-    "batch_size": 4, # Reduzido pois BERT consome mais memória
-    "nb_epochs": 50,
+    "batch_size": 8, # Default: 4
+    "nb_epochs": 30, # Default: 50
     "patience": 5,
 }
