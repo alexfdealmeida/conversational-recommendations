@@ -55,7 +55,7 @@ recommender_params = {
 train_sa_params = {
     "learning_rate": 0.001,
     "batch_size": 32, # Default: 16
-    "nb_epochs": 30, # Default: 50
+    "nb_epochs": 10, # Default: 50
     "patience": 5,
     "weight_decay": 0,
     "use_class_weights": True,
@@ -66,7 +66,7 @@ train_sa_params = {
 train_autorec_params = {
     "learning_rate": 0.001,
     "batch_size": 64,
-    "nb_epochs": 30, # Default: 50
+    "nb_epochs": 10, # Default: 50
     "patience": 5,
     "batch_input": "random_noise",
     "max_num_inputs": 10000 
@@ -75,6 +75,6 @@ train_autorec_params = {
 train_recommender_params = {
     "learning_rate": 0.001,
     "batch_size": 8, # Default: 4
-    "nb_epochs": 30, # Default: 50
+    "nb_epochs": 10, # Default: 50
     "patience": 5,
 }
