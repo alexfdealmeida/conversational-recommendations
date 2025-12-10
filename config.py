@@ -36,8 +36,10 @@ REDDIT_VALID_PATH = "task4_reddit_dev.txt"
 REDDIT_TEST_PATH = "task4_reddit_test.txt"
 
 # BERT Settings
-BERT_MODEL_NAME = 'all-mpnet-base-v2' # or 'all-MiniLM-L6-v2' to be faster
-BERT_EMBEDDING_SIZE = 768 # 768 for mpnet, 384 for MiniLM
+# Large: all-mpnet-base-v2 | 768
+# Small: all-MiniLM-L6-v2 | 384
+BERT_MODEL_NAME = 'all-MiniLM-L6-v2'
+BERT_EMBEDDING_SIZE = 384
 
 CONVERSATION_LENGTH_LIMIT = 40
 UTTERANCE_LENGTH_LIMIT = 80
