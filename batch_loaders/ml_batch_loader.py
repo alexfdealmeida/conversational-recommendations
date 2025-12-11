@@ -3,21 +3,20 @@ from tqdm import tqdm
 import numpy as np
 import csv
 import torch
-from torch.autograd import Variable
 import random
 
 import config
 
 
 def load_movies(path):
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         movies = {row[0]: row[1] for row in reader if row[0] != "movieId"}
     return movies
 
 
 def load_movies_merged(path):
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         id2index = {row[3]: int(row[0]) for row in reader if row[0] != "index"}
     return id2index
@@ -41,7 +40,7 @@ def load_ratings(path, as_array=True):
     otherwise, return an array [{movieId: rating}] where each element corresponds to one user.
     """
     data = {}
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         for userId, movieId, rating, timestamp in tqdm(reader):
             if userId != "userId":  # avoid the first row
@@ -49,7 +48,7 @@ def load_ratings(path, as_array=True):
                     data[userId] = {}
                 data[userId][movieId] = rating
     if as_array:
-        return data.values()
+        return list(data.values())
     return data
 
 
@@ -85,12 +84,14 @@ class MlBatchLoader(object):
         # self.id2movies = load_movies(self.movie_path)
         # self.id2index = {id: i for (i, id) in enumerate(self.id2movies)}
         self.id2index = load_movies_merged(self.movie_path)
-        self.n_movies = np.max(self.id2index.values()) + 1
+        
+        self.n_movies = np.max(list(self.id2index.values())) + 1
+        
         print("Loading movie ratings from {}".format(self.data_path))
         self.ratings = {subset: load_ratings(path, as_array=False)
                         for subset, path in self.data_path.items()}
         # list of userIds for each subset
-        self.keys = {subset: ratings.keys() for subset, ratings in self.ratings.items()}
+        self.keys = {subset: list(ratings.keys()) for subset, ratings in self.ratings.items()}
 
     def load_batch(self, subset="train", batch_input="full", max_num_inputs=None, ratings01=None):
         if batch_input == 'random_noise' and max_num_inputs is None:
@@ -117,7 +118,10 @@ class MlBatchLoader(object):
                     max_nb_inputs = min(max_num_inputs, len(train_ratings) - 1)
                     n_inputs = random.randint(1, max(1, max_nb_inputs))
                     # randomly chose the movies that will be in the input
-                    input_keys = random.sample(train_ratings.keys(), n_inputs)
+                    input_keys = random.sample(list(train_ratings.keys()), n_inputs)
+                else:
+                    input_keys = None
+
                 # Create input from training ratings
                 for (movieId, rating) in train_ratings.items():
                     if batch_input == 'full' or (batch_input == 'random_noise' and movieId in input_keys):
@@ -128,6 +132,7 @@ class MlBatchLoader(object):
             # Create targets
             for (movieId, rating) in self.ratings[subset][userId].items():
                 target[i, self.id2index[movieId]] = process_rating(rating, ratings01=ratings01)
-        input = Variable(torch.from_numpy(input).float())
-        target = Variable(torch.from_numpy(target).float())
+        
+        input = torch.from_numpy(input).float()
+        target = torch.from_numpy(target).float()
         return {"input": input, "target": target}
