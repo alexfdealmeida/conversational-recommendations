@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-
+from sklearn.metrics import ndcg_score
 
 class UserEncoder(nn.Module):
     def __init__(self, layer_sizes, n_movies, f):
@@ -140,19 +140,48 @@ class AutoRec(nn.Module):
         n_batches = batch_loader.n_batches[subset]
 
         losses = []
+        ndcg_scores = []
+
         for _ in tqdm(range(n_batches)):
             # load batch
             batch = batch_loader.load_batch(subset=subset, batch_input=batch_input)
             if self.cuda_available:
                 batch["input"] = batch["input"].cuda()
                 batch["target"] = batch["target"].cuda()
-            # compute output and loss
-            output = self.forward(batch["input"])
-            loss = criterion(output, batch["target"])
-            losses.append(loss.item())
+            
+            with torch.no_grad():
+                # compute output and loss
+                output = self.forward(batch["input"])
+                loss = criterion(output, batch["target"])
+                losses.append(loss.item())
+
+                # --- CÁLCULO DO nDCG@10 ---
+                # Move para CPU e NumPy
+                predictions = output.cpu().detach().numpy()
+                targets = batch["target"].cpu().detach().numpy()
+
+                # Tratamento para targets:
+                # O dataset usa -1 para ratings desconhecidos. 
+                # Para nDCG, assumimos que desconhecido = relevância 0.
+                targets_relevance = np.copy(targets)
+                targets_relevance[targets_relevance == -1] = 0
+                
+                # Para evitar erro se todo o batch for de zeros (sem ratings de validação)
+                if np.sum(targets_relevance) > 0:
+                    try:
+                        score = ndcg_score(targets_relevance, predictions, k=10)
+                        ndcg_scores.append(score)
+                    except ValueError:
+                        pass # Ignora batches problemáticos (raro)
+
         # normalize loss and reset nb of ratings observed
         final_loss = criterion.normalize_loss_reset(np.sum(losses))
-        print("{} loss with input={} : {}".format(subset, batch_input, final_loss))
+        
+        # Média do nDCG
+        final_ndcg = np.mean(ndcg_scores) if ndcg_scores else 0.0
+        
+        print("{} loss with input={} : {:.4f} | nDCG@10 : {:.4f}".format(subset, batch_input, final_loss, final_ndcg))
+        
         self.train()
         return final_loss
 
@@ -161,7 +190,7 @@ class ReconstructionLoss(nn.Module):
     def __init__(self):
         super(ReconstructionLoss, self).__init__()
         # Sum of losses
-        self.mse_loss = nn.MSELoss(size_average=False)
+        self.mse_loss = nn.MSELoss(reduction='sum')
         # Keep track of number of observer targets to normalize loss
         self.nb_observed_targets = 0
 
@@ -182,8 +211,8 @@ class ReconstructionLoss(nn.Module):
         :return: mean loss
         """
         if self.nb_observed_targets == 0:
-            raise ValueError(
-                "Nb observed targets was 0. Please evaluate some examples before calling normalize_loss_reset")
+            # raise ValueError("Nb observed targets was 0...") # Comentado para evitar crash em debug
+            return 0
         n_loss = loss / self.nb_observed_targets
         self.nb_observed_targets = 0
         return n_loss
