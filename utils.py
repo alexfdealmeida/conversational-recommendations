@@ -1,6 +1,5 @@
 import os
 import torch
-from torch.autograd import Variable
 import numpy as np
 import nltk
 import time
@@ -16,14 +15,19 @@ def create_dir(path):
 def load_model(model, resume, verbose=True):
     if not os.path.isfile(resume):
         raise ValueError("no checkpoint found at '{}'".format(resume))
+    
     if model.cuda_available:
-        checkpoint = torch.load(resume)
+        checkpoint = torch.load(resume, weights_only=False)
     else:
-        checkpoint = torch.load(resume, map_location=lambda storage, loc: storage)
+        checkpoint = torch.load(resume, map_location=lambda storage, loc: storage, weights_only=False)
+        
     model.load_state_dict(checkpoint['state_dict'])
+    
     if verbose:
+        epoch = checkpoint.get('epoch', '?')
+        best_loss = checkpoint.get('best_loss', '?')
         print("=> loaded checkpoint '{}' (epoch {} with best loss {})"
-              .format(resume, checkpoint['epoch'], checkpoint['best_loss']))
+              .format(resume, epoch, best_loss))
 
 
 def sort_for_packed_sequence(lengths, cuda=False):
@@ -38,9 +42,14 @@ def sort_for_packed_sequence(lengths, cuda=False):
     sorted_lengths = lengths[sorted_idx]
     rev = np.argsort(sorted_idx)  # idx to retrieve original order
 
-    tt = torch.cuda.LongTensor if cuda else torch.LongTensor
-    sorted_idx = Variable(tt(sorted_idx.copy()))
-    rev = Variable(tt(rev.copy()))
+    # PyTorch moderno prefere torch.tensor sobre torch.LongTensor()
+    if cuda:
+        sorted_idx = torch.tensor(sorted_idx.copy(), dtype=torch.long).cuda()
+        rev = torch.tensor(rev.copy(), dtype=torch.long).cuda()
+    else:
+        sorted_idx = torch.tensor(sorted_idx.copy(), dtype=torch.long)
+        rev = torch.tensor(rev.copy(), dtype=torch.long)
+        
     return sorted_lengths, sorted_idx, rev
 
 
@@ -50,6 +59,10 @@ def tokenize(message):
     :param message:
     :return:
     """
+    # Tratamento para mensagens vazias ou None
+    if not message:
+        return []
+        
     sentences = nltk.sent_tokenize(message)
     tokenized = []
     for sentence in sentences:
