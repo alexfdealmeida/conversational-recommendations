@@ -5,6 +5,7 @@ from torch.autograd import Variable
 import numpy as np
 from tqdm import tqdm
 import os
+from sklearn.metrics import ndcg_score
 
 from models.decoders import SwitchingDecoder
 from utils import sort_for_packed_sequence
@@ -50,6 +51,7 @@ class Recommender(nn.Module):
         super(Recommender, self).__init__()
         self.params = params
         self.train_vocab = train_vocab
+        self.vocab_size = len(train_vocab)
         self.n_movies = n_movies
         self.cuda_available = torch.cuda.is_available()
 
@@ -114,7 +116,7 @@ class Recommender(nn.Module):
             eps = torch.randn_like(std)
         return mu + eps * std
 
-    def forward(self, input_dict, return_latent=False):
+    def forward(self, input_dict, return_latent=False, return_recs=False):
         conversation_representations, sentence_representations = self.encoder(
             input_dict, return_all=True, return_sentence_representations=True)
             
@@ -162,16 +164,16 @@ class Recommender(nn.Module):
         else:
             pad_rec = torch.zeros(batch_size, 1, self.n_movies)
             
-        movie_recommendations = torch.cat((pad_rec, movie_recommendations), 1).narrow(
+        movie_recommendations_shifted = torch.cat((pad_rec, movie_recommendations), 1).narrow(
             1, 0, max_conversation_length)
-        movie_recommendations = movie_recommendations.contiguous().view(
+        movie_recommendations_shifted = movie_recommendations_shifted.contiguous().view(
             batch_size * max_conversation_length, -1).index_select(0, sorted_idx)
 
         num_positive_lengths = int((sorted_lengths > 0).sum())
         sorted_utterances = sorted_utterances[:num_positive_lengths]
         sorted_lengths = sorted_lengths[:num_positive_lengths]
         conversation_representations = conversation_representations[:num_positive_lengths]
-        movie_recommendations = movie_recommendations[:num_positive_lengths]
+        movie_recommendations_shifted = movie_recommendations_shifted[:num_positive_lengths]
 
         if self.params['latent_layer_sizes'] is not None:
             h_prior = conversation_representations
@@ -201,7 +203,7 @@ class Recommender(nn.Module):
             sorted_utterances,
             sorted_lengths,
             context,
-            movie_recommendations,
+            movie_recommendations_shifted,
             log_probabilities=True,
             sample_movies=False
         )
@@ -217,6 +219,10 @@ class Recommender(nn.Module):
 
         outputs = outputs.index_select(0, rev).view(batch_size, max_conversation_length, max_utterance_length, -1)
         
+        # Retorno extendido para suportar nDCG
+        if return_recs:
+            return outputs, movie_recommendations
+
         if return_latent:
             return outputs, mu_prior, logvar_prior, mu_posterior, logvar_posterior
         return outputs
@@ -256,6 +262,8 @@ class Recommender(nn.Module):
         n_batches = batch_loader.n_batches[subset]
 
         losses = []
+        ndcg_scores = []
+
         for _ in tqdm(range(n_batches)):
             batch = batch_loader.load_batch(subset=subset)
             if self.cuda_available:
@@ -264,21 +272,59 @@ class Recommender(nn.Module):
                 batch["senders"] = batch["senders"].cuda()
             
             with torch.no_grad():
-                outputs = self.forward(batch)
+                # Obtemos também as recomendações brutas para calcular nDCG
+                outputs, movie_recs = self.forward(batch, return_recs=True)
 
             batch_size, max_conv_length, max_seq_length, vocab_size = outputs.data.shape
             
+            # Filtra apenas turnos do Recommender (-1)
             mask = (batch["senders"].view(-1) == -1)
             idx = torch.nonzero(mask).squeeze()
             
             if idx.numel() == 0: continue
 
-            outputs = outputs.view(-1, max_seq_length, vocab_size).index_select(0, idx)
-            target = batch["target"].view(-1, max_seq_length).index_select(0, idx)
-
-            loss = criterion(outputs.view(-1, vocab_size), target.view(-1))
+            # Loss Calc
+            outputs_filtered = outputs.view(-1, max_seq_length, vocab_size).index_select(0, idx)
+            target_filtered = batch["target"].view(-1, max_seq_length).index_select(0, idx)
+            loss = criterion(outputs_filtered.view(-1, vocab_size), target_filtered.view(-1))
             losses.append(loss.item())
+
+            # --- nDCG@10 Calculation ---
+            # 1. Recupera as recomendações correspondentes aos turnos do Recommender
+            # movie_recs: (batch, conv_len, n_movies) -> Flatten -> (batch*conv_len, n_movies)
+            # Seleciona apenas os índices onde o Recommender falou
+            recs_filtered = movie_recs.view(-1, self.n_movies).index_select(0, idx).cpu().numpy()
             
-        print("{} loss : {}".format(subset, np.mean(losses) if losses else 0))
+            # 2. Identifica quais filmes foram mencionados na resposta alvo (Ground Truth)
+            # target_filtered: (num_recommender_utterances, max_seq_len)
+            targets_cpu = target_filtered.cpu().numpy()
+            
+            # Matriz binária de relevância: (num_samples, n_movies)
+            relevance_binary = np.zeros_like(recs_filtered)
+            
+            has_movies = False
+            for i, sequence in enumerate(targets_cpu):
+                for token_id in sequence:
+                    # IDs de filmes começam após o tamanho do vocabulário
+                    if token_id >= self.vocab_size:
+                        movie_id = token_id - self.vocab_size
+                        if movie_id < self.n_movies:
+                            relevance_binary[i, movie_id] = 1
+                            has_movies = True
+            
+            # Só calcula nDCG se houver filmes no target desse batch
+            if has_movies:
+                try:
+                    # ndcg_score espera (n_samples, n_items)
+                    score = ndcg_score(relevance_binary, recs_filtered, k=10)
+                    ndcg_scores.append(score)
+                except ValueError:
+                    pass
+
+        mean_loss = np.mean(losses) if losses else 0
+        mean_ndcg = np.mean(ndcg_scores) if ndcg_scores else 0.0
+        
+        print("{} loss : {:.4f} | nDCG@10 : {:.4f}".format(subset, mean_loss, mean_ndcg))
+        
         self.train()
-        return np.mean(losses) if losses else 0
+        return mean_loss
